@@ -55,5 +55,3 @@ def encrypt_and_hash():
     print(f"Encrypted secret: {encrypted}")
     print(f"Applied padding: {padding} bytes")
     print(f"Hashed secret: {hash(secret)}")
-
-encrypt_and_hash()

@@ -1,0 +1,2 @@
+pyopenssl==23.0.0  # required not to break pip
+cryptography~=39.0.0

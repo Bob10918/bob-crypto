@@ -1,7 +1,5 @@
 #!/usr/local/bin/python3.8
 
-# require cryptography~=39.0.0
-
 from typing import Tuple, Optional
 import getpass
 import secrets

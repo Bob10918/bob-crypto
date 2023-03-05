@@ -35,7 +35,7 @@ def generate_encrypted_key_string(application_name: str = None, username: str = 
     password = getpass.getpass("Manda password: ")
     real_key = AESGCM.generate_key(REAL_KEY_LENGTH)
     salt = secrets.token_bytes(SALT_LENGTH)
-    derived_key = derive_key_from_password(password, salt)
+    derived_key = derive_key(password.encode(ENCODING), salt)
     aesgcm = AESGCM(derived_key)
     nonce = secrets.token_bytes(NONCE_LENGTH)
     uuid = uuid4().hex
@@ -66,14 +66,14 @@ def parse_encrypted_string(encrypted_string: str) -> Tuple[bytes, bytes, Optiona
         salt = None
     return nonce, encrypted_data, salt
 
-def derive_key_from_password(password: str, salt: bytes) -> bytes:
+def derive_key(input: bytes, salt: bytes) -> bytes:
     kdf = PBKDF2HMAC(
         algorithm=DERIVE_KEY_HASH_ALGO(),
         length=int(DERIVED_KEY_LENGTH/8),
         salt=salt,
         iterations=DERIVE_KEY_ITERATIONS
     )
-    derived_key = kdf.derive(password.encode(ENCODING))
+    derived_key = kdf.derive(input)
     return derived_key
 
 def canonicalize_associated_data(associated_data: List[Optional[str]]) -> bytes:
@@ -95,19 +95,22 @@ class BobCrypto():
         """Try to fill in all the optional parameters to provide the best integrity to your password"""
         nonce, encrypted_key, salt = parse_encrypted_string(encrypted_key_string)
         password = getpass.getpass("Manda password: ")
-        derived_key = derive_key_from_password(password, salt)
+        derived_key = derive_key(password.encode(ENCODING), salt)
         aesgcm = AESGCM(derived_key)
         self._real_key = aesgcm.decrypt(nonce, encrypted_key, canonicalize_associated_data([application_name, username, uuid]))
 
     def encrypt(self, data: str, associated_data: List[str]) -> str:
-        aesgcm = AESGCM(self._real_key)
+        salt = secrets.token_bytes(SALT_LENGTH)
+        key = derive_key(self._real_key, salt)
         nonce = secrets.token_bytes(NONCE_LENGTH)
+        aesgcm = AESGCM(key)
         encrypted_data = aesgcm.encrypt(nonce, data.encode(ENCODING), canonicalize_associated_data(associated_data))
-        return dump_encrypted_string(nonce, encrypted_data)
+        return dump_encrypted_string(nonce, encrypted_data, salt)
 
     def decrypt(self, encrypted_string: str, associated_data: List[str]) -> str:
-        aesgcm = AESGCM(self._real_key)
-        nonce, encrypted_data, _ = parse_encrypted_string(encrypted_string)
+        nonce, encrypted_data, salt = parse_encrypted_string(encrypted_string)
+        key = derive_key(self._real_key, salt)
+        aesgcm = AESGCM(key)
         return aesgcm.decrypt(nonce, encrypted_data, canonicalize_associated_data(associated_data)).decode(ENCODING)
 
 

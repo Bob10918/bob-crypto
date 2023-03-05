@@ -1,8 +1,9 @@
 #!/usr/local/bin/python3.8
 
-from typing import Tuple, Optional
+from typing import List, Tuple, Optional
 import getpass
 import secrets
+from uuid import uuid4
 
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
@@ -16,7 +17,6 @@ SALT_LENGTH = 32  # bytes
 DERIVE_KEY_HASH_ALGO = hashes.SHA3_512
 DERIVE_KEY_ITERATIONS = 10**6
 NONCE_LENGTH = 32  # bytes
-ASSOCIATED_DATA = 'bobcryptoad'.encode(ENCODING)
 
 # encrypted string symbols and identifiers
 ES_ASSIGN_SYMBOL = '='
@@ -30,7 +30,7 @@ class InvalidKeyStringException(Exception):
     pass
 
 
-def generate_encrypted_key_string() -> str:
+def generate_encrypted_key_string(application_name: str = None, username: str = None) -> Tuple[str, str]:
     # https://security.stackexchange.com/questions/38828/how-can-i-securely-convert-a-string-password-to-a-key-used-in-aes
     password = getpass.getpass("Manda password: ")
     real_key = AESGCM.generate_key(REAL_KEY_LENGTH)
@@ -38,8 +38,9 @@ def generate_encrypted_key_string() -> str:
     derived_key = derive_key_from_password(password, salt)
     aesgcm = AESGCM(derived_key)
     nonce = secrets.token_bytes(NONCE_LENGTH)
-    encrypted_key = aesgcm.encrypt(nonce, real_key, ASSOCIATED_DATA)
-    return dump_encrypted_string(nonce, encrypted_key, salt)
+    uuid = uuid4().hex
+    encrypted_key = aesgcm.encrypt(nonce, real_key, canonicalize_associated_data([application_name, username, uuid]))
+    return dump_encrypted_string(nonce, encrypted_key, salt), uuid
 
 def dump_encrypted_string(nonce: bytes, encrypted_data: bytes, salt: bytes = None) -> str:
     dumped = f"{ES_NONCE_IDENTIFIER}{ES_ASSIGN_SYMBOL}{nonce.hex()}{ES_SEPARATOR_SYMBOL}{ES_EDATA_IDENTIFIER}{ES_ASSIGN_SYMBOL}{encrypted_data.hex()}"
@@ -75,36 +76,52 @@ def derive_key_from_password(password: str, salt: bytes) -> bytes:
     derived_key = kdf.derive(password.encode(ENCODING))
     return derived_key
 
+def canonicalize_associated_data(associated_data: List[Optional[str]]) -> bytes:
+    canonicalized = ""
+    for data in associated_data:
+        clean_data = data if data is not None else ""
+        canonicalized += f"_{clean_data}:{len(clean_data)}"
+    if canonicalized.startswith('_'):
+        canonicalized = canonicalized[1:]
+    return canonicalized.encode(ENCODING)
+
 
 class BobCrypto():    
-    def __init__(self, encrypted_key_string: str) -> None:
+    def __init__(self,
+                 encrypted_key_string: str,
+                 uuid: str,
+                 application_name: str = None,
+                 username: str = None) -> None:
+        """Try to fill in all the optional parameters to provide the best integrity to your password"""
         nonce, encrypted_key, salt = parse_encrypted_string(encrypted_key_string)
         password = getpass.getpass("Manda password: ")
         derived_key = derive_key_from_password(password, salt)
         aesgcm = AESGCM(derived_key)
-        self._real_key = aesgcm.decrypt(nonce, encrypted_key, ASSOCIATED_DATA)
+        self._real_key = aesgcm.decrypt(nonce, encrypted_key, canonicalize_associated_data([application_name, username, uuid]))
 
-    def encrypt(self, data: str) -> str:
+    def encrypt(self, data: str, associated_data: List[str]) -> str:
         aesgcm = AESGCM(self._real_key)
         nonce = secrets.token_bytes(NONCE_LENGTH)
-        encrypted_data = aesgcm.encrypt(nonce, data.encode(ENCODING), ASSOCIATED_DATA)
+        encrypted_data = aesgcm.encrypt(nonce, data.encode(ENCODING), canonicalize_associated_data(associated_data))
         return dump_encrypted_string(nonce, encrypted_data)
 
-    def decrypt(self, encrypted_string: str) -> str:
+    def decrypt(self, encrypted_string: str, associated_data: List[str]) -> str:
         aesgcm = AESGCM(self._real_key)
         nonce, encrypted_data, _ = parse_encrypted_string(encrypted_string)
-        return aesgcm.decrypt(nonce, encrypted_data, ASSOCIATED_DATA).decode(ENCODING)
+        return aesgcm.decrypt(nonce, encrypted_data, canonicalize_associated_data(associated_data)).decode(ENCODING)
 
 
-def test(test_data: str = 'bobcrypto'):
-    encrypted_key_string = generate_encrypted_key_string()
+def test(test_data: str = 'bobcrypto', application_name: str = "bobcrypto-test", 
+         username: str = "Bob", associated_data: List[str] = ["bobcrypto", "test"]):
+    encrypted_key_string, uuid = generate_encrypted_key_string(application_name, username)
     print(f"Encrypted key string: {encrypted_key_string}")
-    bc = BobCrypto(encrypted_key_string)
+    print(f"Generated uuid: {uuid}")
+    bc = BobCrypto(encrypted_key_string, uuid, application_name, username)
     print(f"Encrypting test data '{test_data}':...")
-    encrypted_data = bc.encrypt(test_data)
+    encrypted_data = bc.encrypt(test_data, associated_data)
     print(f"Encrypted test data: {encrypted_data}")
     print(f"Decrypting test data:...")
-    decrypted_data = bc.decrypt(encrypted_data)
+    decrypted_data = bc.decrypt(encrypted_data, associated_data)
     print(f"Decrypted test data: '{decrypted_data}'")
     if decrypted_data == test_data:
         print("Success!")

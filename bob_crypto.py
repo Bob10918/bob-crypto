@@ -136,3 +136,10 @@ class BobCrypto():
         key = self._expand_key(canonicalize_associated_data(associated_data + [salt]))
         chacha = ChaCha20Poly1305(key)
         return chacha.decrypt(nonce, encrypted_data, canonicalize_associated_data(associated_data)).decode(ENCODING)
+    
+    def interactive_encrypt(self):
+        data = getpass.getpass("Inserisci plaintext: ")
+        associated_data = []
+        while (ad := input("Inserisci aad (lascia vuoto per terminare): ")) != '':
+            associated_data.append(ad)
+        print(self.encrypt(data, associated_data))

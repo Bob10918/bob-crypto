@@ -5,6 +5,8 @@ import getpass
 import secrets
 from uuid import uuid4
 
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.kdf.hkdf import HKDFExpand
 from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
@@ -14,6 +16,7 @@ REAL_KEY_LENGTH = 256  # bits
 DERIVED_KEY_LENGTH = 256  # bits
 SALT_LENGTH = 32  # bytes
 NONCE_LENGTH = 32  # bytes
+HKDF_EXPAND_ALGORITHM = hashes.SHA3_512
 
 # encrypted string symbols and identifiers
 ES_ASSIGN_SYMBOL = '='
@@ -33,7 +36,7 @@ def generate_encrypted_key_string(from_password: bool = False, application_name:
     if from_password:
         # https://security.stackexchange.com/questions/38828/how-can-i-securely-convert-a-string-password-to-a-key-used-in-aes
         password = getpass.getpass("Manda password: ")
-        encrypting_key = derive_key(password.encode(ENCODING), salt)
+        encrypting_key = derive_key_from_password(password.encode(ENCODING), salt)
     else:
         encrypting_key = bytes.fromhex(getpass.getpass("Manda key: "))
     real_key = AESGCM.generate_key(REAL_KEY_LENGTH)
@@ -67,7 +70,7 @@ def parse_encrypted_string(encrypted_string: str) -> Tuple[bytes, bytes, Optiona
         salt = None
     return nonce, encrypted_data, salt
 
-def derive_key(input: bytes, salt: bytes) -> bytes:
+def derive_key_from_password(input: bytes, salt: bytes) -> bytes:
     # https://soatok.blog/2022/12/29/what-we-do-in-the-etc-shadow-cryptography-with-passwords/
     kdf = Scrypt(
         salt=salt,
@@ -103,22 +106,32 @@ class BobCrypto():
         nonce, encrypted_key, salt = parse_encrypted_string(encrypted_key_string)
         if from_password:
             password = getpass.getpass("Manda password: ")
-            key = derive_key(password.encode(ENCODING), salt)
+            key = derive_key_from_password(password.encode(ENCODING), salt)
         else:
             key = bytes.fromhex(getpass.getpass("Manda key: "))
         aesgcm = AESGCM(key)
         self._real_key = aesgcm.decrypt(nonce, encrypted_key, canonicalize_associated_data([application_name, username, uuid]))
 
+    def _expand_key(self, info: bytes) -> bytes:
+        hkdf = HKDFExpand(
+            algorithm=HKDF_EXPAND_ALGORITHM(),
+            length=int(REAL_KEY_LENGTH/8),
+            info=info
+        )
+        return hkdf.derive(self._real_key)
+
     def encrypt(self, data: str, associated_data: List[str]) -> str:
+        # https://soatok.blog/2021/11/17/understanding-hkdf/
         salt = secrets.token_bytes(SALT_LENGTH)
-        key = derive_key(self._real_key, salt)
+        key = self._expand_key(canonicalize_associated_data(associated_data + [salt]))
         nonce = secrets.token_bytes(NONCE_LENGTH)
         aesgcm = AESGCM(key)
         encrypted_data = aesgcm.encrypt(nonce, data.encode(ENCODING), canonicalize_associated_data(associated_data))
         return dump_encrypted_string(nonce, encrypted_data, salt)
 
     def decrypt(self, encrypted_string: str, associated_data: List[str]) -> str:
+        # https://soatok.blog/2021/11/17/understanding-hkdf/
         nonce, encrypted_data, salt = parse_encrypted_string(encrypted_string)
-        key = derive_key(self._real_key, salt)
+        key = self._expand_key(canonicalize_associated_data(associated_data + [salt]))
         aesgcm = AESGCM(key)
         return aesgcm.decrypt(nonce, encrypted_data, canonicalize_associated_data(associated_data)).decode(ENCODING)

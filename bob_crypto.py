@@ -5,8 +5,7 @@ import getpass
 import secrets
 from uuid import uuid4
 
-from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 ENCODING = 'utf-8'
@@ -14,8 +13,6 @@ ENCODING = 'utf-8'
 REAL_KEY_LENGTH = 256  # bits
 DERIVED_KEY_LENGTH = 256  # bits
 SALT_LENGTH = 32  # bytes
-DERIVE_KEY_HASH_ALGO = hashes.SHA3_512
-DERIVE_KEY_ITERATIONS = 10**6
 NONCE_LENGTH = 32  # bytes
 
 # encrypted string symbols and identifiers
@@ -67,11 +64,13 @@ def parse_encrypted_string(encrypted_string: str) -> Tuple[bytes, bytes, Optiona
     return nonce, encrypted_data, salt
 
 def derive_key(input: bytes, salt: bytes) -> bytes:
-    kdf = PBKDF2HMAC(
-        algorithm=DERIVE_KEY_HASH_ALGO(),
-        length=int(DERIVED_KEY_LENGTH/8),
+    # https://soatok.blog/2022/12/29/what-we-do-in-the-etc-shadow-cryptography-with-passwords/
+    kdf = Scrypt(
         salt=salt,
-        iterations=DERIVE_KEY_ITERATIONS
+        length=int(DERIVED_KEY_LENGTH/8),
+        n=2097152, # 2**21
+        r=8,
+        p=1
     )
     derived_key = kdf.derive(input)
     return derived_key

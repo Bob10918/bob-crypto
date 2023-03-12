@@ -8,15 +8,16 @@ from uuid import uuid4
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.hkdf import HKDFExpand
 from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
-from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
 
+# constants
+CHACHA20_KEY_LENGTH = 32  # bytes
+NONCE_LENGTH = 12  # bytes
+
+# modifiable parameters
 ENCODING = 'utf-8'
-
-REAL_KEY_LENGTH = 256  # bits
-DERIVED_KEY_LENGTH = 256  # bits
 DERIVE_KEY_SALT = b'bob_crypto_\xcd\xf16\xf0BZ\n\xbf\xf2\x9c\x13\x82N\xd6{\x05\xc2\xf2W|\x98'  # 32 bytes
 SALT_LENGTH = 32  # bytes
-NONCE_LENGTH = 32  # bytes
 HKDF_EXPAND_ALGORITHM = hashes.SHA3_512
 
 # encrypted string symbols and identifiers
@@ -39,11 +40,11 @@ def generate_encrypted_key_string(from_password: bool = False, application_name:
         encrypting_key = derive_key_from_password(password.encode(ENCODING), DERIVE_KEY_SALT)
     else:
         encrypting_key = bytes.fromhex(getpass.getpass("Manda key: "))
-    real_key = AESGCM.generate_key(REAL_KEY_LENGTH)
-    aesgcm = AESGCM(encrypting_key)
+    real_key = ChaCha20Poly1305.generate_key()
+    chacha = ChaCha20Poly1305(encrypting_key)
     nonce = secrets.token_bytes(NONCE_LENGTH)
     uuid = uuid4().hex
-    encrypted_key = aesgcm.encrypt(nonce, real_key, canonicalize_associated_data([application_name, username, uuid]))
+    encrypted_key = chacha.encrypt(nonce, real_key, canonicalize_associated_data([application_name, username, uuid]))
     return dump_encrypted_string(nonce, encrypted_key), uuid
 
 def dump_encrypted_string(nonce: bytes, encrypted_data: bytes, salt: bytes = None) -> str:
@@ -74,7 +75,7 @@ def derive_key_from_password(input: bytes, salt: bytes) -> bytes:
     # https://soatok.blog/2022/12/29/what-we-do-in-the-etc-shadow-cryptography-with-passwords/
     kdf = Scrypt(
         salt=salt,
-        length=int(DERIVED_KEY_LENGTH/8),
+        length=CHACHA20_KEY_LENGTH,
         n=2097152, # 2**21
         r=8,
         p=1
@@ -109,13 +110,13 @@ class BobCrypto():
             key = derive_key_from_password(password.encode(ENCODING), DERIVE_KEY_SALT)
         else:
             key = bytes.fromhex(getpass.getpass("Manda key: "))
-        aesgcm = AESGCM(key)
-        self._real_key = aesgcm.decrypt(nonce, encrypted_key, canonicalize_associated_data([application_name, username, uuid]))
+        chacha = ChaCha20Poly1305(key)
+        self._real_key = chacha.decrypt(nonce, encrypted_key, canonicalize_associated_data([application_name, username, uuid]))
 
     def _expand_key(self, info: bytes) -> bytes:
         hkdf = HKDFExpand(
             algorithm=HKDF_EXPAND_ALGORITHM(),
-            length=int(REAL_KEY_LENGTH/8),
+            length=CHACHA20_KEY_LENGTH,
             info=info
         )
         return hkdf.derive(self._real_key)
@@ -125,13 +126,13 @@ class BobCrypto():
         salt = secrets.token_bytes(SALT_LENGTH)
         key = self._expand_key(canonicalize_associated_data(associated_data + [salt]))
         nonce = secrets.token_bytes(NONCE_LENGTH)
-        aesgcm = AESGCM(key)
-        encrypted_data = aesgcm.encrypt(nonce, data.encode(ENCODING), canonicalize_associated_data(associated_data))
+        chacha = ChaCha20Poly1305(key)
+        encrypted_data = chacha.encrypt(nonce, data.encode(ENCODING), canonicalize_associated_data(associated_data))
         return dump_encrypted_string(nonce, encrypted_data, salt)
 
     def decrypt(self, encrypted_string: str, associated_data: List[str]) -> str:
         # https://soatok.blog/2021/11/17/understanding-hkdf/
         nonce, encrypted_data, salt = parse_encrypted_string(encrypted_string)
         key = self._expand_key(canonicalize_associated_data(associated_data + [salt]))
-        aesgcm = AESGCM(key)
-        return aesgcm.decrypt(nonce, encrypted_data, canonicalize_associated_data(associated_data)).decode(ENCODING)
+        chacha = ChaCha20Poly1305(key)
+        return chacha.decrypt(nonce, encrypted_data, canonicalize_associated_data(associated_data)).decode(ENCODING)

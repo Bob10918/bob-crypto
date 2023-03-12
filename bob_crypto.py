@@ -27,13 +27,17 @@ class InvalidKeyStringException(Exception):
     pass
 
 
-def generate_encrypted_key_string(application_name: str = None, username: str = None) -> Tuple[str, str]:
-    # https://security.stackexchange.com/questions/38828/how-can-i-securely-convert-a-string-password-to-a-key-used-in-aes
-    password = getpass.getpass("Manda password: ")
-    real_key = AESGCM.generate_key(REAL_KEY_LENGTH)
+def generate_encrypted_key_string(from_password: bool = False, application_name: str = None, username: str = None) -> Tuple[str, str]:
+    # salt is always included even if not used to not give hints to the adversary
     salt = secrets.token_bytes(SALT_LENGTH)
-    derived_key = derive_key(password.encode(ENCODING), salt)
-    aesgcm = AESGCM(derived_key)
+    if from_password:
+        # https://security.stackexchange.com/questions/38828/how-can-i-securely-convert-a-string-password-to-a-key-used-in-aes
+        password = getpass.getpass("Manda password: ")
+        encrypting_key = derive_key(password.encode(ENCODING), salt)
+    else:
+        encrypting_key = bytes.fromhex(getpass.getpass("Manda key: "))
+    real_key = AESGCM.generate_key(REAL_KEY_LENGTH)
+    aesgcm = AESGCM(encrypting_key)
     nonce = secrets.token_bytes(NONCE_LENGTH)
     uuid = uuid4().hex
     encrypted_key = aesgcm.encrypt(nonce, real_key, canonicalize_associated_data([application_name, username, uuid]))
@@ -89,13 +93,20 @@ class BobCrypto():
     def __init__(self,
                  encrypted_key_string: str,
                  uuid: str,
+                 from_password: bool = False,
                  application_name: str = None,
                  username: str = None) -> None:
-        """Try to fill in all the optional parameters to provide the best integrity to your password"""
+        """The input key MUST be a cryptographic random bytes string hex formatted. The only exception is when the 'from_password' parameter is 
+        set to True, but this is discouraged. It is better to use a true random key and store it in a safe place.
+        Try to fill in the optional parameters 'application_name' and 'username' to provide the best integrity to your password."""
+
         nonce, encrypted_key, salt = parse_encrypted_string(encrypted_key_string)
-        password = getpass.getpass("Manda password: ")
-        derived_key = derive_key(password.encode(ENCODING), salt)
-        aesgcm = AESGCM(derived_key)
+        if from_password:
+            password = getpass.getpass("Manda password: ")
+            key = derive_key(password.encode(ENCODING), salt)
+        else:
+            key = bytes.fromhex(getpass.getpass("Manda key: "))
+        aesgcm = AESGCM(key)
         self._real_key = aesgcm.decrypt(nonce, encrypted_key, canonicalize_associated_data([application_name, username, uuid]))
 
     def encrypt(self, data: str, associated_data: List[str]) -> str:

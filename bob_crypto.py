@@ -14,6 +14,7 @@ ENCODING = 'utf-8'
 
 REAL_KEY_LENGTH = 256  # bits
 DERIVED_KEY_LENGTH = 256  # bits
+DERIVE_KEY_SALT = b'bob_crypto_\xcd\xf16\xf0BZ\n\xbf\xf2\x9c\x13\x82N\xd6{\x05\xc2\xf2W|\x98'  # 32 bytes
 SALT_LENGTH = 32  # bytes
 NONCE_LENGTH = 32  # bytes
 HKDF_EXPAND_ALGORITHM = hashes.SHA3_512
@@ -31,12 +32,11 @@ class InvalidKeyStringException(Exception):
 
 
 def generate_encrypted_key_string(from_password: bool = False, application_name: str = None, username: str = None) -> Tuple[str, str]:
-    # salt is always included even if not used to not give hints to the adversary
-    salt = secrets.token_bytes(SALT_LENGTH)
+    # salt is fixed to achieve KDF security: https://soatok.blog/2021/11/17/understanding-hkdf/
     if from_password:
         # https://security.stackexchange.com/questions/38828/how-can-i-securely-convert-a-string-password-to-a-key-used-in-aes
         password = getpass.getpass("Manda password: ")
-        encrypting_key = derive_key_from_password(password.encode(ENCODING), salt)
+        encrypting_key = derive_key_from_password(password.encode(ENCODING), DERIVE_KEY_SALT)
     else:
         encrypting_key = bytes.fromhex(getpass.getpass("Manda key: "))
     real_key = AESGCM.generate_key(REAL_KEY_LENGTH)
@@ -44,7 +44,7 @@ def generate_encrypted_key_string(from_password: bool = False, application_name:
     nonce = secrets.token_bytes(NONCE_LENGTH)
     uuid = uuid4().hex
     encrypted_key = aesgcm.encrypt(nonce, real_key, canonicalize_associated_data([application_name, username, uuid]))
-    return dump_encrypted_string(nonce, encrypted_key, salt), uuid
+    return dump_encrypted_string(nonce, encrypted_key), uuid
 
 def dump_encrypted_string(nonce: bytes, encrypted_data: bytes, salt: bytes = None) -> str:
     dumped = f"{ES_NONCE_IDENTIFIER}{ES_ASSIGN_SYMBOL}{nonce.hex()}{ES_SEPARATOR_SYMBOL}{ES_EDATA_IDENTIFIER}{ES_ASSIGN_SYMBOL}{encrypted_data.hex()}"
@@ -103,10 +103,10 @@ class BobCrypto():
         set to True, but this is discouraged. It is better to use a true random key and store it in a safe place.
         Try to fill in the optional parameters 'application_name' and 'username' to provide the best integrity to your password."""
 
-        nonce, encrypted_key, salt = parse_encrypted_string(encrypted_key_string)
+        nonce, encrypted_key, _ = parse_encrypted_string(encrypted_key_string)
         if from_password:
             password = getpass.getpass("Manda password: ")
-            key = derive_key_from_password(password.encode(ENCODING), salt)
+            key = derive_key_from_password(password.encode(ENCODING), DERIVE_KEY_SALT)
         else:
             key = bytes.fromhex(getpass.getpass("Manda key: "))
         aesgcm = AESGCM(key)
